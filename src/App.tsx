@@ -9,12 +9,20 @@ function App() {
   const [score, setScore] = useState(0);
   const [streak, setStreak] = useState(0);
   const [highScore, setHighScore] = useState(() => {
-    const saved = localStorage.getItem('oddOneOut_highScore');
-    return saved ? parseInt(saved) : 0;
+    try {
+      const saved = localStorage.getItem('oddOneOut_highScore');
+      return saved ? parseInt(saved) : 0;
+    } catch {
+      return 0;
+    }
   });
   const [maxLevel, setMaxLevel] = useState(() => {
-    const saved = localStorage.getItem('oddOneOut_maxLevel');
-    return saved ? parseInt(saved) : 1;
+    try {
+      const saved = localStorage.getItem('oddOneOut_maxLevel');
+      return saved ? parseInt(saved) : 1;
+    } catch {
+      return 1;
+    }
   });
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
   const [timeLeft, setTimeLeft] = useState(0);
@@ -23,6 +31,7 @@ function App() {
   const [selectedDifficulty, setSelectedDifficulty] = useState<Difficulty>('easy');
   const [startLevel, setStartLevel] = useState(1);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const gameStateRef = useRef<GameState>('menu');
   const [shakeWrong, setShakeWrong] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
   const [particles, setParticles] = useState<{id: number, x: number, y: number, emoji: string}[]>([]);
@@ -39,6 +48,11 @@ function App() {
   const [creatorResult, setCreatorResult] = useState<'correct' | 'wrong' | null>(null);
   const creatorTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Keep gameStateRef in sync
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
+
   const spawnParticles = useCallback(() => {
     const emojis = ['🎉', '✨', '⭐', '🌟', '💫', '🎊'];
     const newParticles = Array.from({ length: 8 }, (_, i) => ({
@@ -51,7 +65,35 @@ function App() {
     setTimeout(() => setParticles([]), 1500);
   }, []);
 
+  const clearTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const startTimer = useCallback((seconds: number) => {
+    clearTimer();
+    setTimeLeft(seconds);
+    timerRef.current = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          // Time's up - only if still playing
+          if (gameStateRef.current === 'playing') {
+            clearTimer();
+            setGameState('wrong');
+            setShowResult(true);
+            setStreak(0);
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, [clearTimer]);
+
   const startGame = useCallback((level: number, difficulty: Difficulty) => {
+    clearTimer();
     setCurrentLevel(level);
     setSelectedDifficulty(difficulty);
     setScore(0);
@@ -59,79 +101,49 @@ function App() {
     setStartLevel(level);
     const newPuzzle = generatePuzzle(difficulty, level);
     setPuzzle(newPuzzle);
-    setTimeLeft(newPuzzle.config.timeLimit);
     setSelectedCell(null);
     setShowResult(false);
     setCelebrate(false);
     setGameState('playing');
-  }, []);
+    startTimer(newPuzzle.config.timeLimit);
+  }, [clearTimer, startTimer]);
 
   const nextLevel = useCallback(() => {
+    clearTimer();
     const next = currentLevel + 1;
     setCurrentLevel(next);
     if (next > maxLevel) {
       setMaxLevel(next);
-      localStorage.setItem('oddOneOut_maxLevel', next.toString());
+      try {
+        localStorage.setItem('oddOneOut_maxLevel', next.toString());
+      } catch { /* ignore */ }
     }
     const newPuzzle = generatePuzzle(selectedDifficulty, next);
     setPuzzle(newPuzzle);
-    setTimeLeft(newPuzzle.config.timeLimit);
     setSelectedCell(null);
     setShowResult(false);
     setCelebrate(false);
     setGameState('playing');
-  }, [currentLevel, selectedDifficulty, maxLevel]);
+    startTimer(newPuzzle.config.timeLimit);
+  }, [currentLevel, selectedDifficulty, maxLevel, clearTimer, startTimer]);
 
-  // Timer logic
+  // Cleanup timer on unmount
   useEffect(() => {
-    if (gameState === 'playing' && timeLeft > 0) {
-      timerRef.current = setInterval(() => {
-        setTimeLeft(prev => {
-          if (prev <= 1) {
-            if (timerRef.current) clearInterval(timerRef.current);
-            setGameState('wrong');
-            setShowResult(true);
-            setStreak(0);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => {
-        if (timerRef.current) clearInterval(timerRef.current);
-      };
-    }
-  }, [gameState, timeLeft > 0]);
-
-  // Creator timer
-  useEffect(() => {
-    if (creatorPlaying && creatorTimeLeft > 0) {
-      creatorTimerRef.current = setInterval(() => {
-        setCreatorTimeLeft(prev => {
-          if (prev <= 1) {
-            if (creatorTimerRef.current) clearInterval(creatorTimerRef.current);
-            setCreatorPlaying(false);
-            setCreatorResult('wrong');
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => {
-        if (creatorTimerRef.current) clearInterval(creatorTimerRef.current);
-      };
-    }
-  }, [creatorPlaying, creatorTimeLeft > 0]);
+    return () => {
+      clearTimer();
+      if (creatorTimerRef.current) clearInterval(creatorTimerRef.current);
+    };
+  }, [clearTimer]);
 
   const handleCellClick = (cellIndex: number) => {
     if (gameState !== 'playing' || showResult) return;
     
     setSelectedCell(cellIndex);
     setShowResult(true);
-    
-    if (timerRef.current) clearInterval(timerRef.current);
+    clearTimer();
 
     if (cellIndex === puzzle?.oddIndex) {
+      // Correct!
       const bonus = streak >= 3 ? 50 : 0;
       const timeBonus = timeLeft * 10;
       const levelBonus = currentLevel * 5;
@@ -140,7 +152,9 @@ function App() {
         const newScore = prev + points;
         if (newScore > highScore) {
           setHighScore(newScore);
-          localStorage.setItem('oddOneOut_highScore', newScore.toString());
+          try {
+            localStorage.setItem('oddOneOut_highScore', newScore.toString());
+          } catch { /* ignore */ }
         }
         return newScore;
       });
@@ -149,6 +163,7 @@ function App() {
       setGameState('correct');
       spawnParticles();
     } else {
+      // Wrong!
       setStreak(0);
       setShakeWrong(true);
       setGameState('wrong');
@@ -159,7 +174,10 @@ function App() {
   const handleCreatorCellClick = (cellIndex: number) => {
     if (!creatorPlaying || creatorResult) return;
     
-    if (creatorTimerRef.current) clearInterval(creatorTimerRef.current);
+    if (creatorTimerRef.current) {
+      clearInterval(creatorTimerRef.current);
+      creatorTimerRef.current = null;
+    }
     setCreatorPlaying(false);
 
     if (cellIndex === creatorOddIndex) {
@@ -169,6 +187,32 @@ function App() {
       setCreatorResult('wrong');
     }
   };
+
+  // Creator timer effect
+  useEffect(() => {
+    if (creatorPlaying && !creatorResult) {
+      creatorTimerRef.current = setInterval(() => {
+        setCreatorTimeLeft(prev => {
+          if (prev <= 1) {
+            if (creatorTimerRef.current) {
+              clearInterval(creatorTimerRef.current);
+              creatorTimerRef.current = null;
+            }
+            setCreatorPlaying(false);
+            setCreatorResult('wrong');
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => {
+        if (creatorTimerRef.current) {
+          clearInterval(creatorTimerRef.current);
+          creatorTimerRef.current = null;
+        }
+      };
+    }
+  }, [creatorPlaying, creatorResult]);
 
   const generateCreatorPuzzle = () => {
     const totalCells = creatorGridSize * creatorGridSize;
@@ -297,7 +341,7 @@ function App() {
               onClick={() => setGameState('creator')}
               className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-bold py-3 px-4 rounded-2xl text-sm shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
             >
-              ✨ Create Puzzle
+              ✨ Create
             </button>
           </div>
 
@@ -305,7 +349,7 @@ function App() {
             <h3 className="font-bold text-gray-700 mb-2 text-sm">🎯 How to Play</h3>
             <ul className="text-sm text-gray-600 space-y-1.5">
               <li className="flex items-center gap-2"><span>👀</span> Look at the grid of fruit emojis</li>
-              <li className="flex items-center gap-2"><span>🔍</span> Find the one that's different</li>
+              <li className="flex items-center gap-2"><span>🔍</span> Find the one that&apos;s different</li>
               <li className="flex items-center gap-2"><span>⏱️</span> Beat the clock each round</li>
               <li className="flex items-center gap-2"><span>🔥</span> Build streaks for bonus points!</li>
               <li className="flex items-center gap-2"><span>📈</span> 60 levels: Easy → Medium → Hard</li>
@@ -516,7 +560,6 @@ function App() {
                         disabled={!!creatorResult}
                         className={`aspect-square flex items-center justify-center rounded-xl transition-all duration-200 text-2xl sm:text-3xl
                           ${creatorResult && cell.isOdd ? 'bg-green-200 ring-4 ring-green-500 scale-110' : ''}
-                          ${creatorResult && !cell.isOdd && creatorResult === 'wrong' ? 'bg-gray-50' : ''}
                           ${!creatorResult ? 'hover:bg-emerald-100 hover:scale-105 active:scale-95 cursor-pointer bg-gray-50' : 'bg-gray-50'}
                         `}
                       >
@@ -586,7 +629,7 @@ function App() {
               🔄 Play Again
             </button>
             <button
-              onClick={() => setGameState('menu')}
+              onClick={() => { clearTimer(); setGameState('menu'); }}
               className="w-full bg-gradient-to-r from-gray-500 to-gray-600 text-white font-bold py-3 px-6 rounded-2xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
             >
               🏠 Main Menu
@@ -616,7 +659,7 @@ function App() {
         <div className="flex justify-between items-center mb-2">
           <button
             onClick={() => {
-              if (timerRef.current) clearInterval(timerRef.current);
+              clearTimer();
               setGameState('menu');
             }}
             className="bg-white/20 hover:bg-white/30 text-white rounded-full px-3 py-1.5 text-sm font-medium transition-colors"
@@ -699,7 +742,7 @@ function App() {
               {gameState === 'correct' ? (
                 <div>
                   <p className="text-2xl font-bold text-green-700 mb-1">
-                    🎉 {['Awesome!', 'Amazing!', 'Great!', 'Perfect!', 'Bravo!'][Math.floor(Math.random() * 5)]}
+                    🎉 {['Awesome!', 'Amazing!', 'Great!', 'Perfect!', 'Bravo!'][currentLevel % 5]}
                   </p>
                   <p className="text-green-600 text-sm font-medium">
                     {streak >= 3 ? `🔥 ${streak}x streak! +${50} bonus!` : `+${100 + timeLeft * 10 + currentLevel * 5} points`}
@@ -722,12 +765,13 @@ function App() {
                   <div className="flex gap-2 mt-3 justify-center">
                     <button
                       onClick={() => {
+                        clearTimer();
                         const newPuzzle = generatePuzzle(selectedDifficulty, currentLevel);
                         setPuzzle(newPuzzle);
-                        setTimeLeft(newPuzzle.config.timeLimit);
                         setSelectedCell(null);
                         setShowResult(false);
                         setGameState('playing');
+                        startTimer(newPuzzle.config.timeLimit);
                       }}
                       className="bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold py-2 px-5 rounded-full shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
                     >
@@ -735,7 +779,7 @@ function App() {
                     </button>
                     <button
                       onClick={() => {
-                        if (timerRef.current) clearInterval(timerRef.current);
+                        clearTimer();
                         setGameState('menu');
                       }}
                       className="bg-gradient-to-r from-gray-400 to-gray-500 text-white font-bold py-2 px-5 rounded-full shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
@@ -753,7 +797,7 @@ function App() {
       {/* Hint text */}
       {!showResult && (
         <p className="text-white/70 mt-4 text-center text-sm animate-pulse">
-          👆 Tap the emoji that doesn't belong!
+          👆 Tap the emoji that doesn&apos;t belong!
         </p>
       )}
     </div>

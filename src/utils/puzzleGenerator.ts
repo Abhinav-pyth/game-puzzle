@@ -23,10 +23,10 @@ export const similarPairs: [string, string][] = [
   ['🍎', '🍏'], // red vs green apple
   ['🍋', '🍊'], // lemon vs orange
   ['🍑', '🍎'], // peach vs apple (similar shape)
-  ['🍇', '🫐'], // grape vs blueberry
+  ['🍇', '🍒'], // grape vs cherry (both round fruits)
   ['🥝', '🥥'], // kiwi vs coconut
   ['🍅', '🍎'], // tomato vs apple
-  ['🍌', '🥒'], // banana vs cucumber
+  ['🍌', '🍋'], // banana vs lemon (both yellow)
 ];
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
